@@ -34,6 +34,28 @@ services:
     image: ${RUNNER_IMAGE:-myoung34/github-runner:2.338.0-ubuntu-noble}
     restart: unless-stopped
 
+    # ── If the job has to reach a service the host publishes ────────────────
+    # Default `bridge`. Inside a bridged container, 127.0.0.1 is the CONTAINER,
+    # not the host — so a job that curls a service another container published
+    # on the host's loopback gets a connection refused, or worse, reaches
+    # something else entirely.
+    #
+    # This is not hypothetical: local dev-environment routers (DDEV's, for one)
+    # bind `127.0.0.1:80` and `127.0.0.1:443` deliberately, and their hostnames
+    # resolve to 127.0.0.1 through public DNS. A job that starts such a router
+    # and then waits for its hostnames to answer will wait forever from inside a
+    # bridged container.
+    #
+    # `host` fixes it on LINUX: the container shares the host's network
+    # namespace, so 127.0.0.1 means the same thing on both sides and no host
+    # entries are needed. It does NOT work on Docker Desktop for Mac or Windows,
+    # where the daemon lives in a VM — there the runner has to run natively on
+    # the host instead of in this stack.
+    #
+    # The security cost is small relative to what is already granted: a runner
+    # holding the Docker socket is root on the host anyway.
+    network_mode: ${RUNNER_NETWORK_MODE:-bridge}
+
     # Many hosts run a Watchtower that watches every container by default. One
     # that restarts a runner mid-job loses the job and reports it as cancelled.
     # Opt out explicitly — and give any service you add here the same label.

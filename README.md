@@ -83,6 +83,27 @@ A worked example: a repository whose push cost 60 billed minutes, 52 of them a
 single browser-test job. Moving that one job removed 87 % of the bill and left
 four jobs, eight minutes, on GitHub.
 
+## Can the job reach the host?
+
+Default networking is `bridge`, and inside a bridged container **127.0.0.1 is
+the container, not the host**. A job that starts something publishing on the
+host's loopback and then waits for it will wait forever.
+
+That catches a whole class of jobs: local dev-environment routers bind
+`127.0.0.1:80` and `127.0.0.1:443` deliberately, and their hostnames resolve to
+127.0.0.1 through public DNS. From inside a bridged runner, those hostnames
+point at the runner.
+
+On **Linux**, set `RUNNER_NETWORK_MODE=host`. The container then shares the
+host's network namespace, 127.0.0.1 means the same thing on both sides, and no
+host entries are needed. The extra exposure is small next to what the Docker
+socket already grants.
+
+On **Docker Desktop for Mac or Windows** there is no fix: the daemon runs in a
+VM, host networking does not behave, and bind mounts only resolve under the
+directories Docker Desktop shares. A job of that shape needs the runner
+installed **natively** on the host rather than through this stack.
+
 ## The two rules this stack encodes
 
 **Identical paths.** The runner uses the host's Docker daemon, so every path it
