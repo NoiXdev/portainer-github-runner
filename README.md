@@ -117,8 +117,23 @@ a cancelled job never runs its cleanup step:
    New self-hosted runner. Valid one hour, single-use.
 4. **Deploy in Portainer**: Stacks → Add stack → **Repository**, this URL,
    compose path `docker-compose.yml`. Under Environment variables switch to
-   **Advanced mode** and paste [`stack.env.example`](stack.env.example), then
-   fill the five required values.
+   **Advanced mode** and paste the block at the top of
+   [`stack.env.example`](stack.env.example) — the part above the dashed line,
+   which carries no comments on purpose: Portainer parses every line as
+   `KEY=VALUE`, and a comment containing an `=` can become a variable of its
+   own. Then fill the five required values.
+
+   Three are easy to get wrong, and each failure reads like something else:
+
+   - **`RUNNER_TOKEN`** takes the registration token. `RUNNER_PAT` is a
+     different thing — a personal access token the image uses to fetch a
+     registration token itself. A registration token placed there is sent as a
+     PAT and GitHub answers **404**, which looks like a wrong URL.
+   - **`RUNNER_EPHEMERAL`** is tested for *presence*, not truth. Any non-empty
+     value turns it on, `false` included. Off means **empty**.
+   - **`RUNNER_ORG_NAME`** is only for `RUNNER_SCOPE=org`. With scope `org` and
+     no name the image complains and then continues anyway — its exit runs in a
+     subshell — so what you see is a **404** from a URL with an empty org in it.
 5. **Check it is Idle** under Settings → Actions → Runners, with your label.
 6. **Point the job at it** — and only now, because a `runs-on` label with no
    runner behind it queues the job for 24 hours and then fails it:
