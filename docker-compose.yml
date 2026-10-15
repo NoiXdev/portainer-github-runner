@@ -53,11 +53,30 @@ services:
       # jobs this host cannot serve.
       LABELS: ${RUNNER_LABELS:?set at least one specific label}
 
+      # Only read when RUNNER_SCOPE is org or enterprise. Left empty for a
+      # repo runner. Upstream prints "ORG_NAME required for org runners" and
+      # then CARRIES ON, because its exit runs in a subshell — the real symptom
+      # is a 404 from a URL with an empty org in it.
+      ORG_NAME: ${RUNNER_ORG_NAME:-}
+
       # ── Registration ─────────────────────────────────────────────────────
-      # Short-lived (one hour) and single-use: it registers the runner, which
-      # then holds its own credentials. Paste a fresh one in Portainer's
-      # Environment variables section. A PAT works too but outlives its purpose.
-      ACCESS_TOKEN: ${RUNNER_TOKEN:?paste a registration token}
+      # The registration token from Settings -> Actions -> Runners -> New
+      # self-hosted runner. Short-lived (one hour) and single-use: it registers
+      # the runner, which then holds its own credentials.
+      #
+      # It goes in RUNNER_TOKEN, which upstream hands straight to
+      # `config.sh --token`. NOT in ACCESS_TOKEN, which is something else
+      # entirely: a personal access token that upstream uses to CALL the API
+      # and fetch a registration token itself. A registration token placed
+      # there is used as a PAT, and GitHub answers 404 — which reads like a
+      # wrong URL rather than a wrong variable.
+      RUNNER_TOKEN: ${RUNNER_TOKEN:?paste a registration token}
+
+      # The PAT alternative, for anyone who would rather not refresh a
+      # registration token by hand. It needs repo scope (or admin:org for an
+      # org runner) and it lives as long as you let it, which is the trade.
+      # Leave empty to use RUNNER_TOKEN above; setting both makes this one win.
+      ACCESS_TOKEN: ${RUNNER_PAT:-}
 
       # ── Lifecycle ────────────────────────────────────────────────────────
       # `false` keeps the container between jobs, so pulled images, package
@@ -65,9 +84,12 @@ services:
       # from one job to the next; the prune service below is what keeps that
       # from growing without bound.
       #
-      # Set `true` for a clean container per job — correct when the repository
-      # is public or takes outside pull requests, and worth the re-download.
-      EPHEMERAL: ${RUNNER_EPHEMERAL:-false}
+      # ⚠ Upstream tests this with `[ -n "$EPHEMERAL" ]` — PRESENCE, not truth.
+      # Any non-empty value turns ephemeral ON, the word `false` included. So
+      # "off" means EMPTY, and that is why the default here is empty rather
+      # than the `false` you would expect. Set RUNNER_EPHEMERAL to anything
+      # (`true` reads best) to turn it on.
+      EPHEMERAL: ${RUNNER_EPHEMERAL:-}
       RUN_AS_ROOT: "false"
       RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:?set the work root — see "identical paths"}
 
