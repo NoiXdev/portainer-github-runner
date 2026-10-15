@@ -129,6 +129,23 @@ a cancelled job never runs its cleanup step:
 A deploy after the token expired fails with a registration error. Fetch a fresh
 token and set the variable again; nothing else is lost.
 
+## Resetting a host
+
+`cleanup.sh` runs on the host and reports by default — it changes nothing until
+you name a scope, because it cannot tell a job's leftovers from another stack's
+data:
+
+```bash
+./cleanup.sh                              # what is using disk, what each flag would do
+./cleanup.sh --containers --images        # the usual reset
+./cleanup.sh --work /srv/e2e-ci/_work     # clear a work root, keeping _tool and _actions
+KEEP=24h ./cleanup.sh --all               # spare anything younger than 24h
+```
+
+`--volumes` exists and is the one to think about: on a shared host it destroys
+other stacks' data, because a volume whose container was removed counts as
+unused.
+
 ## Several repositories on one host
 
 Deploy this stack once per repository, under different Portainer stack names.

@@ -1,0 +1,37 @@
+name: An idea
+description: Something this stack should do, or do differently
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: this project is deliberately one stack
+        with two services, and it trusts every workflow in the repository it
+        serves. Two kinds of idea are declined on principle, with no
+        reflection on the idea itself:
+
+        - **making the Docker socket look optional.** If you need isolation,
+          [actions-runner-controller](https://github.com/actions/actions-runner-controller)
+          or rootless Docker is the right tool. A half-sandbox that reads as
+          safe is worse than an honest warning.
+        - **anything that needs a third service to make sense.**
+  - type: textarea
+    id: problem
+    attributes:
+      label: What goes wrong today
+      description: The situation, not the solution. What did you try, and what did it cost you?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+    validations:
+      required: false
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Does it keep the two rules?
+      options:
+        - label: The work root stays mounted at its own host path
+        - label: The prune still keeps the images the next job needs

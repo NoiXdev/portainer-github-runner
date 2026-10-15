@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/NoiXdev/portainer-github-runner/security/advisories/new
+    about: A private advisory, not a public issue. Read SECURITY.md first — a socket-mounted runner reaching the host is the documented design, not a bug.
+  - name: I need isolation, not trust
+    url: https://github.com/actions/actions-runner-controller
+    about: This stack trusts every workflow in the target repository. If you cannot, actions-runner-controller or rootless Docker is the right tool.

@@ -1,0 +1,59 @@
+name: Something does not work
+description: A job fails, the runner misbehaves, or the prune removed the wrong thing
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two failures account for most reports, and both are in the README:
+
+        **A container starts and serves nothing, or a build cannot find files
+        that are plainly there** — the work root is not mounted at its own host
+        path. `RUNNER_WORK_ROOT`, the host side and the container side of the
+        volume must be the same string.
+
+        **A job cannot bind a port** — something else on the host holds it.
+        `ss -ltnp` on the host will say what.
+
+        If it is one of those, you do not need an issue. If it is not, please
+        fill this in.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The error as it appeared, not a summary of it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Host OS, `docker --version`, `docker compose version`, and whether Portainer or plain compose deployed it.
+      placeholder: |
+        Host: Debian 12
+        docker: 29.9.0
+        compose: v2.32.1
+        deployed via: Portainer 2.21, stack from repository
+    validations:
+      required: true
+  - type: textarea
+    id: env_vars
+    attributes:
+      label: Your variables
+      description: The whole block from Portainer. **Remove `RUNNER_TOKEN`** — it is a credential, and it is single-use so it is worthless to us anyway.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: work_root
+    attributes:
+      label: Does `ls` on the host show your checkout under RUNNER_WORK_ROOT?
+      description: If it is empty while a job is running, that is the identical-paths problem above.
+    validations:
+      required: true
