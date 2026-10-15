@@ -4,6 +4,35 @@ A self-hosted GitHub Actions runner as one Portainer stack, with the two things
 such a stack usually lacks: a work directory that bind mounts actually resolve
 through, and something that keeps the disk from filling up.
 
+> ### 🚧 Active development — not proven in production yet
+>
+> This is in use and being shaped by that use. **No job has run end to end on
+> it yet.** The first real deploy crash-looped and turned up three
+> configuration bugs in this repository, all now fixed:
+>
+> - the registration token was documented into the wrong variable, which GitHub
+>   answers with a 404 that reads like a wrong URL,
+> - `EPHEMERAL` is presence-tested upstream, so the `false` this repo shipped
+>   turned it on,
+> - `ORG_NAME` was not passed through, and upstream complains about that and
+>   then carries on with an empty organisation.
+>
+> Known unproven, in rough order of how likely it is to bite:
+>
+> - **actions that install tooling.** They are written for GitHub's images — a
+>   known Ubuntu, `sudo`, a predictable `PATH`. Some work in a runner container
+>   and some do not, and the failure is usually an installer that exits without
+>   a reason. Baking the tool into a derived image is the way out.
+> - **a full job on this stack.** The identical-paths rule is reasoned from
+>   upstream's behaviour and from how the Docker socket resolves paths; it has
+>   not yet been demonstrated by a passing suite.
+> - **long-run behaviour.** Whether the prune's 24-hour window is the right
+>   trade over weeks, on a disk shared with other stacks, is a guess so far.
+>
+> Pin a commit rather than tracking `main` if a surprise would cost you
+> something. [Issues](../../issues) are welcome and are how the unproven parts
+> become proven ones.
+
 ---
 
 ## ⚠️ Read this before you deploy it
