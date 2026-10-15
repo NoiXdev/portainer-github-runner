@@ -39,8 +39,7 @@ Things that *are* in scope:
 
 Open a [private security
 advisory](https://github.com/NoiXdev/portainer-github-runner/security/advisories/new).
-If you prefer e-mail, write to the address on
-[noix.dev](https://noix.dev) and say the repository's name.
+If you prefer e-mail, write to <hello@noix.dev> and say the repository's name.
 
 Please include the compose file and environment you used, the Docker version,
 and what you expected instead. There is no bounty; there is a credit in the

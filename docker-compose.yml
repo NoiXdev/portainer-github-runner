@@ -10,7 +10,8 @@
 # The runner uses the HOST's Docker daemon (the socket below). Every path it
 # hands to Docker is therefore resolved on the HOST filesystem, not inside this
 # container. A workflow step that bind-mounts its checkout — `docker run -v
-# "$PWD:/src"`, docker compose, DDEV, testcontainers, anything — passes a path
+# "$PWD:/src"`, docker compose, testcontainers, a local dev-environment tool —
+  # passes a path
 # from inside the container to a daemon outside it.
 #
 # If the work directory is not mounted at its own host path, Docker silently
