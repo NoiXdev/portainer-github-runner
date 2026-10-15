@@ -1,0 +1,123 @@
+# A self-hosted GitHub Actions runner as one Portainer stack.
+#
+# One stack serves ONE repository. To serve several, deploy this stack several
+# times under different Portainer stack names — and give each one its own
+# RUNNER_WORK_ROOT, because that path is not interchangeable (see below).
+#
+# ───────────────────────────────────────────────────────────────────────────────
+# THE RULE THAT MAKES THIS WORK: identical paths.
+#
+# The runner uses the HOST's Docker daemon (the socket below). Every path it
+# hands to Docker is therefore resolved on the HOST filesystem, not inside this
+# container. A workflow step that bind-mounts its checkout — `docker run -v
+# "$PWD:/src"`, docker compose, DDEV, testcontainers, anything — passes a path
+# from inside the container to a daemon outside it.
+#
+# If the work directory is not mounted at its own host path, Docker silently
+# creates empty directories on the host and mounts those. Nothing errors. The
+# symptom is a container that starts and serves nothing, or a build that cannot
+# find files that are plainly there.
+#
+# Hence RUNNER_WORKDIR, the host side and the container side of the work volume
+# are all the same string. Change one, change all three.
+# ───────────────────────────────────────────────────────────────────────────────
+
+services:
+  runner:
+    # Pinned, never :latest — a runner that pulls a new image mid-job loses the
+    # job. Bump deliberately. GitHub force-upgrades the runner binary inside the
+    # image when it falls too far behind, so being a few versions back is safe.
+    # Pick the OS your workflows were written against: `ubuntu-noble` is what
+    # GitHub's own `ubuntu-latest` resolved to until the Ubuntu 26 migration
+    # that begins 2026-10-19.
+    image: ${RUNNER_IMAGE:-myoung34/github-runner:2.338.0-ubuntu-noble}
+    restart: unless-stopped
+
+    # Many hosts run a Watchtower that watches every container by default. One
+    # that restarts a runner mid-job loses the job and reports it as cancelled.
+    # Opt out explicitly — and give any service you add here the same label.
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+    environment:
+      # ── What this runner serves ──────────────────────────────────────────
+      # A repository URL for RUNNER_SCOPE=repo, an organisation URL for
+      # RUNNER_SCOPE=org. Read the security note in the README before choosing
+      # `org`: an org-scoped runner accepts jobs from every repository in it.
+      REPO_URL: ${REPO_URL:?set the repository or organisation URL}
+      RUNNER_SCOPE: ${RUNNER_SCOPE:-repo}
+      RUNNER_NAME: ${RUNNER_NAME:?set a name — it is how you find this runner in the UI}
+      # The labels a workflow asks for with `runs-on`. Always give a specific
+      # one: with only `self-hosted` any job in scope can land here, including
+      # jobs this host cannot serve.
+      LABELS: ${RUNNER_LABELS:?set at least one specific label}
+
+      # ── Registration ─────────────────────────────────────────────────────
+      # Short-lived (one hour) and single-use: it registers the runner, which
+      # then holds its own credentials. Paste a fresh one in Portainer's
+      # Environment variables section. A PAT works too but outlives its purpose.
+      ACCESS_TOKEN: ${RUNNER_TOKEN:?paste a registration token}
+
+      # ── Lifecycle ────────────────────────────────────────────────────────
+      # `false` keeps the container between jobs, so pulled images, package
+      # stores and browser downloads stay warm. The cost is that state leaks
+      # from one job to the next; the prune service below is what keeps that
+      # from growing without bound.
+      #
+      # Set `true` for a clean container per job — correct when the repository
+      # is public or takes outside pull requests, and worth the re-download.
+      EPHEMERAL: ${RUNNER_EPHEMERAL:-false}
+      RUN_AS_ROOT: "false"
+      RUNNER_WORKDIR: ${RUNNER_WORK_ROOT:?set the work root — see "identical paths"}
+
+    volumes:
+      # The host's Docker daemon. This is root-equivalent on this host: any
+      # workflow this runner executes can start a privileged container and read
+      # or write anything. Read the README's security section before pointing
+      # this at a public repository, a repository that takes outside pull
+      # requests, or an organisation.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+      # Identical paths. See the rule at the top of this file.
+      - ${RUNNER_WORK_ROOT:?}:${RUNNER_WORK_ROOT:?}
+
+      # Survive a container recreate so a rebuilt runner does not re-download
+      # every package store and browser. Harmless when a toolchain is unused.
+      - runner-cache:/home/runner/.cache
+      - runner-local:/home/runner/.local
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Why this service is not optional.
+  #
+  # A persistent runner accumulates images: every branch build publishes a new
+  # tag, and every job pulls one. Nothing else on a Docker host prunes them.
+  # The author of this stack watched a 37 GB production host reach 100 % that
+  # way, which presented as an unhealthy container and a database that could
+  # not write — nothing that names the disk.
+  #
+  # The filter matters as much as the prune. An unfiltered `docker image prune
+  # -af` deletes the images the NEXT job needs and adds their download to every
+  # run. `until=24h` keeps a day's worth of warm images and drops the rest.
+  # ───────────────────────────────────────────────────────────────────────────
+  prune:
+    image: ${PRUNE_IMAGE:-docker:29-cli}
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      PRUNE_KEEP: ${PRUNE_KEEP:-24h}
+      PRUNE_EVERY_SECONDS: ${PRUNE_EVERY_SECONDS:-3600}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          docker image prune -af --filter "until=$${PRUNE_KEEP}" || true
+          docker builder prune -af --filter "unused-for=$${PRUNE_KEEP}" || true
+          sleep "$${PRUNE_EVERY_SECONDS}"
+        done
+
+volumes:
+  runner-cache:
+  runner-local:
