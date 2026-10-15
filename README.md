@@ -2,107 +2,143 @@
 
 A self-hosted GitHub Actions runner as one Portainer stack, with the two things
 such a stack usually lacks: a work directory that bind mounts actually resolve
-through, and something that stops the disk filling up.
+through, and something that keeps the disk from filling up.
 
-## Why bother
+---
+
+## ⚠️ Read this before you deploy it
+
+**This runner mounts the host's Docker socket. That is root on the host.**
+
+Any workflow this runner executes can start a privileged container and read or
+write anything on the machine — the other stacks, their volumes, their secrets,
+the host filesystem. There is no sandbox. "A workflow" includes any workflow
+file in the repository you point it at, on any branch, written by anyone who
+can push or open a pull request.
+
+That is an acceptable trade for a **private repository, trusted authors, and a
+host that carries nothing precious**. It is not acceptable if any of this is
+true:
+
+| situation | why it breaks | what to do instead |
+|---|---|---|
+| the repository is **public**, or accepts **pull requests from forks** | a stranger's pull request runs as root on your host | don't. If you must, `RUNNER_EPHEMERAL=true` and a throwaway VM, and read GitHub's own warning about self-hosted runners on public repositories |
+| `RUNNER_SCOPE=org` | the runner accepts jobs from **every** repository in the organisation, including ones added later by someone else | scope it to one repository |
+| the host runs **production**, or another project's data | a runaway or malicious job reaches it | give the runner its own machine |
+
+GitHub says the same thing, more briefly, and they are right: *"We recommend
+that you only use self-hosted runners with private repositories."* The reason
+they give is the one in the table — a fork's pull request can run code on your
+machine ([Adding self-hosted
+runners](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)).
+
+If you want isolation rather than trust, this is the wrong stack — use
+[actions-runner-controller](https://github.com/actions/actions-runner-controller)
+or rootless Docker.
+
+---
+
+## When it is worth it
 
 GitHub bills hosted runner minutes; self-hosted minutes are free. (GitHub
-announced a per-minute charge for self-hosted runners for March 2026 and then
+announced a per-minute charge for self-hosted runners for March 2026, then
 postponed it; it is not in effect as of October 2026. Re-check before relying
-on it.) The arithmetic only matters for long jobs — moving a two-minute
-typecheck saves nothing and costs you a machine to look after. Measure first,
-move the one job that dominates the bill, and leave the fast jobs on GitHub's
-runners so a push still gets a verdict when your host is off.
+on it.)
 
-## The two rules this stack exists to encode
+The arithmetic only works for **long** jobs. Moving a two-minute typecheck
+saves nothing and costs you a machine to look after. Measure your runs, move
+the one job that dominates the bill, and leave the fast jobs on GitHub's
+runners — then a push still gets its basic verdict when your host is off.
+
+A worked example: a repository whose push cost 60 billed minutes, 52 of them a
+single browser-test job. Moving that one job removed 87 % of the bill and left
+four jobs, eight minutes, on GitHub.
+
+## The two rules this stack encodes
 
 **Identical paths.** The runner uses the host's Docker daemon, so every path it
-gives Docker is resolved on the host. If the work directory is not mounted at
-its own host path, Docker creates empty directories and mounts those — no
-error, just a container that serves nothing or a build that cannot see files
-that are plainly there. `RUNNER_WORK_ROOT` is therefore used three times, as
-the env var and both sides of the volume.
+hands to Docker is resolved on the host. A workflow step that bind-mounts its
+checkout — `docker run -v "$PWD:/src"`, docker compose, testcontainers, a local
+dev-environment tool — passes a path from inside the container to a daemon
+outside it. If the work directory is not mounted at its own host path, Docker
+silently creates empty directories and mounts those. Nothing errors. The
+symptom is a container that starts and serves nothing, or a build that cannot
+find files that are plainly there. `RUNNER_WORK_ROOT` is therefore used three
+times: the env var and both sides of the volume.
 
 **A filtered prune.** A persistent runner accumulates one image per branch
-build, and nothing on a Docker host removes them. The prune service drops
-images and build cache older than `PRUNE_KEEP` hourly. The filter is the point:
-an unfiltered `docker image prune -af` deletes what the next job needs and adds
-the download to every run.
+build, plus every container a job forgets to tear down, and nothing on a Docker
+host removes them. The prune service does it hourly for anything older than
+`PRUNE_KEEP`. The filter is the point: an unfiltered `docker image prune -af`
+deletes what the next job needs and adds the download to every run.
+
+### What the prune deliberately does not touch
+
+- **Volumes.** `docker volume prune --all` on a shared host destroys other
+  stacks' data — a volume whose container was removed counts as unused. Opt in
+  with `PRUNE_VOLUMES=true` only when the host runs nothing but runners.
+- **`_work`.** `actions/checkout` defaults to `clean: true` (`git clean -ffdx`),
+  so each job starts from a clean tree. `_work/_tool` and `_work/_actions` are
+  caches worth keeping; deleting them costs every job a re-download and buys a
+  few hundred megabytes.
+
+### What no prune can fix
+
+State a job leaves **inside a volume it reuses** — a seeded test database is
+the classic one. On a hosted runner the VM is discarded, so most workflows
+never learned to clean up; on a persistent runner the next run then tests
+against the previous run's leftovers, and no amount of pruning sees it.
+
+Tear that down **in the workflow, at the start of the job as well as the end** —
+a cancelled job never runs its cleanup step:
+
+```yaml
+- name: Tear down anything a previous run left behind
+  run: docker compose -f your-stack.yml down -v --remove-orphans || true
+
+# … the job …
+
+- name: Tear down
+  if: always()
+  run: docker compose -f your-stack.yml down -v --remove-orphans || true
+```
 
 ## Deploy
 
-1. **Check the host can do the job.** Whatever your workflow needs must be free
-   here — ports above all, if the job serves anything. A runner that cannot
-   bind its ports fails in the job, not at deploy.
+1. **Check the host can do the job.** Whatever your workflow binds must be free
+   — ports above all, if the job serves anything. A runner that cannot bind its
+   ports fails inside the job, not at deploy time.
 2. **Create the work directory**, owned by uid 1000 (the runner user):
    ```bash
-   sudo mkdir -p /srv/<purpose>-ci/_work
-   sudo chown 1000:1000 /srv/<purpose>-ci/_work
+   sudo mkdir -p /srv/e2e-ci/_work
+   sudo chown 1000:1000 /srv/e2e-ci/_work
    ```
-3. **Get a registration token**: the repository's (or organisation's)
-   Settings → Actions → Runners → New self-hosted runner. One hour,
-   single-use.
-4. **Deploy the stack** in Portainer from this repository, filling the
-   variables from `.env.example`.
-5. **Check it is Idle** under Settings → Actions → Runners, carrying the label
-   you set.
+3. **Get a registration token**: the repository's Settings → Actions → Runners →
+   New self-hosted runner. Valid one hour, single-use.
+4. **Deploy in Portainer**: Stacks → Add stack → **Repository**, this URL,
+   compose path `docker-compose.yml`. Under Environment variables switch to
+   **Advanced mode** and paste [`stack.env.example`](stack.env.example), then
+   fill the five required values.
+5. **Check it is Idle** under Settings → Actions → Runners, with your label.
 6. **Point the job at it** — and only now, because a `runs-on` label with no
-   runner behind it queues for 24 hours before failing:
+   runner behind it queues the job for 24 hours and then fails it:
    ```yaml
-   runs-on: [self-hosted, linux, x64, <your-label>]
+   runs-on: [self-hosted, linux, x64, your-label]
    ```
 
 A deploy after the token expired fails with a registration error. Fetch a fresh
-token, set the variable again; nothing else is lost.
+token and set the variable again; nothing else is lost.
 
 ## Several repositories on one host
 
 Deploy this stack once per repository, under different Portainer stack names.
-Give each its own `RUNNER_NAME`, `RUNNER_LABELS` and — this one bites —
-**its own `RUNNER_WORK_ROOT`**. Two stacks sharing a work root will overwrite
-each other's checkouts.
+Give each its own `RUNNER_NAME`, `RUNNER_LABELS` and — this one bites — **its
+own `RUNNER_WORK_ROOT`**. Two stacks sharing a work root overwrite each other's
+checkouts.
 
 Do not reach for `deploy.replicas`: every replica would register under the same
-`RUNNER_NAME` and share one work root.
+name and share one work root.
 
-## Security: the Docker socket is root on this host
+## License
 
-The runner mounts `/var/run/docker.sock`. Any workflow it runs can start a
-privileged container and read or write anything on the host. For a private,
-single-author repository on a host that carries nothing precious, that is a
-reasonable trade. It stops being one as soon as any of this is true:
-
-- **the repository is public, or accepts pull requests from forks** — a pull
-  request can then run arbitrary code as root on your host. Do not point this
-  stack at such a repository without `RUNNER_EPHEMERAL=true` at minimum, and
-  preferably not at all;
-- **`RUNNER_SCOPE=org`** — the runner then accepts jobs from every repository
-  in the organisation, including ones added later by someone else;
-- **the host carries anything whose loss would hurt** — secrets, production
-  data, another project's volumes.
-
-In any of those cases, give the runner a throwaway VM, or use a rootless or
-ephemeral setup instead of this one.
-
-## Per-project notes
-
-### Klubkern (`klubkern/klubkern-web`) — the E2E job
-
-The case this stack was first written for. Worth reading as a worked example of
-"what the host must provide".
-
-- Measured 2026-10-13: one push cost 60 billed minutes, of which the Playwright
-  E2E job was **52**. The other four jobs stayed on `ubuntu-latest`.
-- The job runs DDEV, whose router publishes five hostnames on the host's
-  **ports 80 and 443**, and the job fails unless all five answer `200`. Check
-  with `ss -ltnp '( sport = :80 or sport = :443 )'` before deploying. If
-  something holds them, moving DDEV's `router_http_port`/`router_https_port` is
-  not enough on its own — the hardcoded test URLs have to follow.
-- The project's CI override sets `performance_mode: none`, a real bind mount,
-  which is precisely why the identical-paths rule is not optional there.
-- `*.ddev.site` is public wildcard DNS pointing at 127.0.0.1 and needs no host
-  entries, unless the host runs a DNS filter that strips private answers.
-- Label `klubkern-e2e`, work root `/srv/klubkern-ci/_work`.
-- Unproven at the time of writing: `ddev/github-action-setup-ddev` is built for
-  GitHub-hosted runners and installs DDEV with `sudo`. If it fails inside the
-  container, bake DDEV into a derived image rather than fighting the action.
+MIT. See [LICENSE](LICENSE).

@@ -87,17 +87,40 @@ services:
       - runner-local:/home/runner/.local
 
   # ───────────────────────────────────────────────────────────────────────────
-  # Why this service is not optional.
+  # Why this service is not optional, and what it deliberately does NOT do.
   #
-  # A persistent runner accumulates images: every branch build publishes a new
-  # tag, and every job pulls one. Nothing else on a Docker host prunes them.
-  # The author of this stack watched a 37 GB production host reach 100 % that
-  # way, which presented as an unhealthy container and a database that could
-  # not write — nothing that names the disk.
+  # A persistent runner accumulates work nothing else removes:
   #
-  # The filter matters as much as the prune. An unfiltered `docker image prune
-  # -af` deletes the images the NEXT job needs and adds their download to every
-  # run. `until=24h` keeps a day's worth of warm images and drops the rest.
+  #   images     — one per branch build, pulled by every job. Nothing on a
+  #                Docker host prunes them. A 37 GB host filled this way
+  #                presents as an unhealthy container and a database that
+  #                cannot write: nothing that names the disk.
+  #   containers — a job that creates containers and does not tear them down
+  #                leaves them stopped. On a hosted runner the VM is discarded,
+  #                so most workflows never learned to clean up.
+  #
+  # The FILTER matters as much as the prune. An unfiltered `docker image prune
+  # -af` deletes the images the next job needs and adds their download to every
+  # run. `until=24h` keeps a day of warm images and drops the rest.
+  #
+  # NOT pruned here, on purpose:
+  #
+  #   volumes    — `docker volume prune --all` on a shared host destroys other
+  #                stacks' data: a volume whose container was removed counts as
+  #                unused. Opt in with PRUNE_VOLUMES=true only when this host
+  #                runs nothing but runners. Without `--all` Docker prunes only
+  #                anonymous volumes, which is why the flag is all-or-nothing.
+  #   _work      — the runner's own directory. `actions/checkout` defaults to
+  #                `clean: true` (`git clean -ffdx`), so each job starts from a
+  #                clean tree; `_work/_tool` and `_work/_actions` are caches
+  #                you want to keep. Deleting them costs every job a
+  #                re-download and buys a few hundred megabytes.
+  #
+  # And the thing this service CANNOT fix: state a job leaves inside a volume
+  # it reuses — a seeded test database, for one. That makes the next run test
+  # against the previous run's leftovers, and no amount of pruning sees it.
+  # Tear such state down IN THE WORKFLOW, at the start of the job as well as
+  # the end: a cancelled job never runs its cleanup step.
   # ───────────────────────────────────────────────────────────────────────────
   prune:
     image: ${PRUNE_IMAGE:-docker:29-cli}
@@ -109,12 +132,18 @@ services:
     environment:
       PRUNE_KEEP: ${PRUNE_KEEP:-24h}
       PRUNE_EVERY_SECONDS: ${PRUNE_EVERY_SECONDS:-3600}
+      # Read the block above before turning this on.
+      PRUNE_VOLUMES: ${PRUNE_VOLUMES:-false}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         while true; do
+          docker container prune -f --filter "until=$${PRUNE_KEEP}" || true
           docker image prune -af --filter "until=$${PRUNE_KEEP}" || true
           docker builder prune -af --filter "unused-for=$${PRUNE_KEEP}" || true
+          if [ "$${PRUNE_VOLUMES}" = "true" ]; then
+            docker volume prune -af || true
+          fi
           sleep "$${PRUNE_EVERY_SECONDS}"
         done
 
